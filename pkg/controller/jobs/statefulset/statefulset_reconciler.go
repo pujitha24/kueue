@@ -261,6 +261,10 @@ func (r *Reconciler) reconcileWorkload(ctx context.Context, sts *appsv1.Stateful
 		}
 	}
 
+	if err := jobframework.UpdateWorkloadPriority(ctx, r.client, r.record, sts, wl, nil); err != nil {
+		return err
+	}
+
 	if shouldReleaseReservation {
 		return r.releaseScaleDownReservation(ctx, wl)
 	}

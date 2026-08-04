@@ -54,12 +54,19 @@ var (
 
 func TestReconciler(t *testing.T) {
 	now := time.Now()
+
+	lowWPCWrapper := utiltestingapi.MakeWorkloadPriorityClass("low").
+		PriorityValue(100)
+	highWPCWrapper := utiltestingapi.MakeWorkloadPriorityClass("high").
+		PriorityValue(200)
+
 	cases := map[string]struct {
 		featureGates    map[featuregate.Feature]bool
 		stsKey          client.ObjectKey
 		statefulSet     *appsv1.StatefulSet
 		pods            []corev1.Pod
 		workloads       []kueue.Workload
+		priorityClasses []client.Object
 		wantStatefulSet *appsv1.StatefulSet
 		wantPods        []corev1.Pod
 		wantWorkloads   []kueue.Workload
@@ -523,6 +530,39 @@ func TestReconciler(t *testing.T) {
 					Obj(),
 			},
 		},
+		"should update workload priority when the priority-class label changes on an existing workload": {
+			featureGates: map[featuregate.Feature]bool{features.TopologyAwareScheduling: false},
+			stsKey:       client.ObjectKey{Name: "sts", Namespace: "ns"},
+			statefulSet: statefulsettesting.MakeStatefulSet("sts", "ns").
+				UID("sts-uid").
+				Replicas(0).
+				Queue("lq").
+				WorkloadPriorityClass(highWPCWrapper.Name).
+				Obj(),
+			workloads: []kueue.Workload{
+				*utiltestingapi.MakeWorkload(GetWorkloadName("sts-uid", "sts"), "ns").
+					Queue("lq").
+					OwnerReference(gvk, "sts", "sts-uid").
+					Priority(lowWPCWrapper.Value).
+					WorkloadPriorityClassRef(lowWPCWrapper.Name).
+					Obj(),
+			},
+			priorityClasses: []client.Object{lowWPCWrapper.Obj(), highWPCWrapper.Obj()},
+			wantStatefulSet: statefulsettesting.MakeStatefulSet("sts", "ns").
+				UID("sts-uid").
+				Replicas(0).
+				Queue("lq").
+				WorkloadPriorityClass(highWPCWrapper.Name).
+				DeepCopy(),
+			wantWorkloads: []kueue.Workload{
+				*utiltestingapi.MakeWorkload(GetWorkloadName("sts-uid", "sts"), "ns").
+					Queue("lq").
+					OwnerReference(gvk, "sts", "sts-uid").
+					Priority(highWPCWrapper.Value).
+					WorkloadPriorityClassRef(highWPCWrapper.Name).
+					Obj(),
+			},
+		},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -535,10 +575,11 @@ func TestReconciler(t *testing.T) {
 				t.Fatalf("Could not add index for %s field name", podcontroller.PodGroupNameCacheKey)
 			}
 
-			objs := make([]client.Object, 0, len(tc.pods)+len(tc.workloads)+1)
+			objs := make([]client.Object, 0, len(tc.pods)+len(tc.workloads)+len(tc.priorityClasses)+1)
 			if tc.statefulSet != nil {
 				objs = append(objs, tc.statefulSet)
 			}
+			objs = append(objs, tc.priorityClasses...)
 
 			for _, p := range tc.pods {
 				objs = append(objs, p.DeepCopy())

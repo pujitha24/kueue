@@ -27,6 +27,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	kueue "sigs.k8s.io/kueue/apis/kueue/v1beta2"
+	controllerconstants "sigs.k8s.io/kueue/pkg/controller/constants"
 	"sigs.k8s.io/kueue/pkg/controller/jobframework"
 	"sigs.k8s.io/kueue/pkg/controller/jobs/pod/constants"
 	"sigs.k8s.io/kueue/pkg/controller/jobs/statefulset"
@@ -224,6 +225,70 @@ var _ = ginkgo.Describe("StatefulSet controller", ginkgo.Label("job:statefulset"
 			g.Expect(wl.Status.Admission).ShouldNot(gomega.BeNil())
 			util.ExpectWorkloadsToBeAdmittedByKeys(ctx, k8sClient, client.ObjectKeyFromObject(wl))
 		}, util.LongTimeout, util.Interval).Should(gomega.Succeed())
+	})
+
+	ginkgo.It("Should update the workload priority when the priority-class label changes on an existing StatefulSet", func() {
+		var lowWorkloadPriorityClass, highWorkloadPriorityClass *kueue.WorkloadPriorityClass
+		ginkgo.By("Creating the low and high WorkloadPriorityClasses", func() {
+			lowWorkloadPriorityClass = utiltestingapi.MakeWorkloadPriorityClass("low").PriorityValue(100).Obj()
+			util.MustCreate(ctx, k8sClient, lowWorkloadPriorityClass)
+
+			highWorkloadPriorityClass = utiltestingapi.MakeWorkloadPriorityClass("high").PriorityValue(1000).Obj()
+			util.MustCreate(ctx, k8sClient, highWorkloadPriorityClass)
+		})
+		ginkgo.DeferCleanup(func() {
+			gomega.Expect(k8sClient.Delete(ctx, lowWorkloadPriorityClass)).To(gomega.Succeed())
+			gomega.Expect(k8sClient.Delete(ctx, highWorkloadPriorityClass)).To(gomega.Succeed())
+		})
+
+		ginkgo.By("Creating a StatefulSet with the low priority class")
+		sts := testingstatefulset.MakeStatefulSet("test-sts", ns.Name).
+			Queue("lq").
+			Replicas(1).
+			WorkloadPriorityClass(lowWorkloadPriorityClass.Name).
+			Request(corev1.ResourceCPU, "100m").
+			Obj()
+		util.MustCreate(ctx, k8sClient, sts)
+
+		createdSTS := &appsv1.StatefulSet{}
+		gomega.Eventually(func(g gomega.Gomega) {
+			g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(sts), createdSTS)).Should(gomega.Succeed())
+		}, util.Timeout, util.Interval).Should(gomega.Succeed())
+
+		wlName := statefulset.GetWorkloadName(createdSTS.UID, createdSTS.Name)
+		wlKey := types.NamespacedName{Name: wlName, Namespace: ns.Name}
+
+		ginkgo.By("Verifying the workload is created with the low priority class", func() {
+			util.ExpectWorkloadsWithWorkloadPriority(ctx, k8sClient, lowWorkloadPriorityClass.Name, lowWorkloadPriorityClass.Value, wlKey)
+		})
+
+		ginkgo.By("Scaling the StatefulSet to zero", func() {
+			gomega.Eventually(func(g gomega.Gomega) {
+				g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(sts), createdSTS)).Should(gomega.Succeed())
+				createdSTS.Spec.Replicas = ptr.To[int32](0)
+				g.Expect(k8sClient.Update(ctx, createdSTS)).Should(gomega.Succeed())
+			}, util.Timeout, util.Interval).Should(gomega.Succeed())
+
+			gomega.Eventually(func(g gomega.Gomega) {
+				wl := &kueue.Workload{}
+				g.Expect(k8sClient.Get(ctx, wlKey, wl)).Should(gomega.Succeed())
+				cond := findWorkloadCondition(wl, kueue.WorkloadQuotaReserved)
+				g.Expect(cond).ShouldNot(gomega.BeNil())
+				g.Expect(cond.Reason).Should(gomega.Equal(kueue.WorkloadOnHold))
+			}, util.LongTimeout, util.Interval).Should(gomega.Succeed())
+		})
+
+		ginkgo.By("Changing the priority-class label to high while scaled to zero", func() {
+			gomega.Eventually(func(g gomega.Gomega) {
+				g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(sts), createdSTS)).Should(gomega.Succeed())
+				createdSTS.Labels[controllerconstants.WorkloadPriorityClassLabel] = highWorkloadPriorityClass.Name
+				g.Expect(k8sClient.Update(ctx, createdSTS)).Should(gomega.Succeed())
+			}, util.Timeout, util.Interval).Should(gomega.Succeed())
+		})
+
+		ginkgo.By("Verifying the existing workload is updated to the high priority class", func() {
+			util.ExpectWorkloadsWithWorkloadPriority(ctx, k8sClient, highWorkloadPriorityClass.Name, highWorkloadPriorityClass.Value, wlKey)
+		})
 	})
 })
 
