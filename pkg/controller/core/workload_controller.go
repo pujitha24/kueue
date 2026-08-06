@@ -520,10 +520,19 @@ func (r *WorkloadReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 		}
 		return ctrl.Result{}, nil
 	}
+	draAlreadyQueued := false
 	if workload.Status(&wl) == workload.StatusPending && dra.NeedsDRAReconcile(&wl, r.draBackedResources) {
 		if done, result, err := r.handleDRA(ctx, &wl); done {
 			return result, err
 		}
+		// handleDRA already added the workload to r.queues (with its
+		// DRA-preprocessed Info) if it was admissible at that point, so the
+		// backoff-requeue path below must not overwrite it with an Info
+		// rebuilt from raw requests. Recompute IsAdmissible here, right after
+		// handleDRA returns, rather than assuming it unconditionally: if the
+		// workload was inadmissible then, handleDRA queued it into r.cache
+		// instead, and it still needs to be added to r.queues below.
+		draAlreadyQueued = workload.IsAdmissible(&wl)
 	}
 
 	if workload.IsActive(&wl) {
@@ -558,9 +567,11 @@ func (r *WorkloadReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 					return ctrl.Result{}, nil
 				}
 
-				if err := r.queues.AddOrUpdateWorkload(log, wl.DeepCopy()); err != nil {
-					log.V(2).Info("failed to put the workload back into queue", "error", err)
-					return ctrl.Result{}, err
+				if !draAlreadyQueued {
+					if err := r.queues.AddOrUpdateWorkload(log, wl.DeepCopy()); err != nil {
+						log.V(2).Info("failed to put the workload back into queue", "error", err)
+						return ctrl.Result{}, err
+					}
 				}
 
 				log.V(3).Info("Workload requeued after backoff")

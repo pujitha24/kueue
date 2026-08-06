@@ -431,6 +431,34 @@ func TestReconcileDRA(t *testing.T) {
 			wantErrorMsg: "failed to list ResourceSlices",
 			wantEvents:   nil,
 		},
+		"reconcile DRA ResourceClaimTemplate requeued after backoff keeps preprocessed DRA resources": {
+			featureGates: map[featuregate.Feature]bool{
+				features.KueueDRAIntegration:              true,
+				features.MultiKueueOrchestratedPreemption: false,
+			},
+			wantDRAResourceTotal: new(int64(1)),
+			wantWorkloadsInQueue: new(1),
+			workload: utiltestingapi.MakeWorkload("wlRequeuedAfterBackoffDRA", "ns").
+				Queue("lq").
+				PodSets(*utiltestingapi.MakePodSet(kueue.DefaultPodSetName, 1).
+					ResourceClaimTemplate("gpu", "gpu-template").
+					Obj()).
+				RequeueState(nil, new(metav1.NewTime(fakeClock.Now().Add(-time.Minute)))).
+				Obj(),
+			resourceClaimTemplates: []*resourcev1.ResourceClaimTemplate{
+				utiltesting.MakeResourceClaimTemplate("gpu-template", "ns").
+					DeviceRequest("gpu-request", "gpu.example.com", 1).
+					Obj(),
+			},
+			cq: utiltestingapi.MakeClusterQueue("cq").
+				Active(metav1.ConditionTrue).
+				ResourceGroup(
+					*utiltestingapi.MakeFlavorQuotas("flavor1").
+						Resource("gpu", "2").Obj(),
+				).Obj(),
+			lq:         utiltestingapi.MakeLocalQueue("lq", "ns").ClusterQueue("cq").Obj(),
+			wantEvents: nil,
+		},
 	}
 	runReconcileTestCases(t, cases, fakeClock)
 }
