@@ -542,6 +542,17 @@ func (r *Reconciler) setDefault(lws *leaderworkersetv1.LeaderWorkerSet, pod *cor
 		pod.Annotations = make(map[string]string)
 	}
 
+	// Pods created from a pod template that predates the queue-name label being
+	// written by the LeaderWorkerSet webhook (e.g. an existing LeaderWorkerSet
+	// that was admitted before the webhook started stamping templates) never get
+	// a queue-name label from the template. Fall back to copying it from the
+	// LeaderWorkerSet directly so such pods are still picked up by Kueue.
+	if _, ok := pod.Labels[controllerconstants.QueueLabel]; !ok {
+		if queueName := jobframework.QueueNameForObject(lws); queueName != "" {
+			pod.Labels[controllerconstants.QueueLabel] = string(queueName)
+		}
+	}
+
 	pod.Labels[constants.ManagedByKueueLabelKey] = constants.ManagedByKueueLabelValue
 	podcontroller.SetPodGroupName(pod, wlName)
 	jobframework.SetPrebuiltWorkloadName(pod, wlName)
