@@ -586,6 +586,13 @@ func applyResourceTransformations(input corev1.ResourceList, transforms map[core
 
 			for outputName, baseFactor := range mapping.Outputs {
 				outputQuantity := multiplyResourceQuantities(inputQuantity, baseFactor)
+				// A negative input (or multiplyBy operand) produces a negative
+				// contribution here even though baseFactor is non-negative. Floor it
+				// before merging so it cannot silently cancel out another
+				// transformation's contribution to the same output resource.
+				if outputQuantity.Sign() < 0 {
+					outputQuantity = *resource.NewQuantity(0, outputQuantity.Format)
+				}
 				if accumulated, ok := output[outputName]; ok {
 					outputQuantity.Add(accumulated)
 				}

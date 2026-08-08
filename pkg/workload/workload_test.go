@@ -713,6 +713,47 @@ func TestNewInfo(t *testing.T) {
 				},
 			},
 		},
+		"transformResourcesNegativeInputDoesNotCancelOtherContribution": {
+			// A negative container request (e.g. from a Workload created before
+			// WorkloadValidateResourcesAreNonNegative existed, or with the gate
+			// disabled) must not silently cancel out another transformation's
+			// contribution to the same output resource.
+			workload: *utiltestingapi.MakeWorkload("transform-negative", "").
+				PodSets(
+					*utiltestingapi.MakePodSet(kueue.DefaultPodSetName, 1).
+						Request("example.com/real-gpu", "8").
+						Request("example.com/credit", "-3").
+						Obj(),
+				).
+				Obj(),
+			infoOptions: []InfoOption{WithResourceTransformations([]config.ResourceTransformation{
+				{
+					Input:    "example.com/real-gpu",
+					Strategy: ptr.To(config.Replace),
+					Outputs: corev1.ResourceList{
+						"example.com/gpu-quota": resource.MustParse("1"),
+					},
+				},
+				{
+					Input:    "example.com/credit",
+					Strategy: ptr.To(config.Replace),
+					Outputs: corev1.ResourceList{
+						"example.com/gpu-quota": resource.MustParse("1"),
+					},
+				},
+			})},
+			wantInfo: Info{
+				TotalRequests: []PodSetResources{
+					{
+						Name: kueue.DefaultPodSetName,
+						Requests: resources.NewRequestsFromMap(map[corev1.ResourceName]int64{
+							corev1.ResourceName("example.com/gpu-quota"): 8,
+						}),
+						Count: 1,
+					},
+				},
+			},
+		},
 		"transformMilliValues": {
 			workload: *utiltestingapi.MakeWorkload("transform", "").
 				PodSets(
