@@ -2575,9 +2575,9 @@ func TestBuildPodRequirementsMergesTolerations(t *testing.T) {
 			if reason != "" {
 				t.Fatalf("podSetInfo() = %q, want no reason", reason)
 			}
-			got, reason := snapshot.buildPodRequirements(info, podSet)
-			if reason != "" {
-				t.Fatalf("buildPodRequirements() = %q, want no reason", reason)
+			got, err := snapshot.buildPodRequirements(info, podSet)
+			if err != nil {
+				t.Fatalf("buildPodRequirements() = %v, want no error", err)
 			}
 			if diff := cmp.Diff(tc.want, got.Tolerations); diff != "" {
 				t.Errorf("unexpected tolerations (-want,+got):\n%s", diff)
