@@ -1066,6 +1066,30 @@ func TestValidateUpdate(t *testing.T) {
 			}.ToAggregate(),
 			featureGates: map[featuregate.Feature]bool{features.ElasticJobsViaWorkloadSlices: true},
 		},
+		"unconstrained topology false with required topology is rejected on update": {
+			oldObj: testingstatefulset.MakeStatefulSet("test-sts", "default").
+				Queue("queue").
+				Obj(),
+			newObj: testingstatefulset.MakeStatefulSet("test-sts", "default").
+				Queue("queue").
+				PodTemplateAnnotation(kueue.PodSetRequiredTopologyAnnotation, "cloud.com/block").
+				PodTemplateAnnotation(kueue.PodSetUnconstrainedTopologyAnnotation, "false").
+				Obj(),
+			wantErr: field.ErrorList{
+				&field.Error{
+					Type:  field.ErrorTypeInvalid,
+					Field: "spec.template.metadata.annotations",
+				},
+				&field.Error{
+					Type:  field.ErrorTypeInvalid,
+					Field: "spec.template.metadata.annotations[" + kueue.PodSetUnconstrainedTopologyAnnotation + "]",
+				},
+			}.ToAggregate(),
+			featureGates: map[featuregate.Feature]bool{
+				features.TopologyAwareScheduling:             true,
+				features.TASRejectFalseUnconstrainedTopology: true,
+			},
+		},
 	}
 
 	for name, tc := range testCases {

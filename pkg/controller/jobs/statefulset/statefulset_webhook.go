@@ -183,6 +183,10 @@ func (wh *Webhook) ValidateUpdate(ctx context.Context, oldSTSObj, newSTSObj *app
 		allErrs = append(allErrs, webhook.ValidateAdmissionGatedByAnnotationOnUpdate(oldStatefulSet.Object(), newStatefulSet.Object())...)
 	}
 
+	if features.Enabled(features.TopologyAwareScheduling) {
+		allErrs = append(allErrs, jobframework.ValidateTASPodSetRequest(specTemplatePath.Child("metadata"), &newStatefulSet.Spec.Template.ObjectMeta)...)
+	}
+
 	suspend, err := wh.integrationManager.WorkloadShouldBeSuspended(
 		ctx,
 		newStatefulSet.Object(),
