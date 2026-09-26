@@ -157,6 +157,13 @@ func (s *TASFlavorSnapshot) finalizeElasticAssignment(
 	leader *TASPodSetRequests,
 	assumedUsage *assumedUsage,
 ) elasticPlacementResult {
+	// The leader has no previous assignment to reuse when it was scaled up from
+	// zero, e.g. when findLeaderAndWorkers breaks a count tie by order and picks
+	// the grouped workers. Place the group afresh, as when the workers have none.
+	if leader != nil && leader.PreviousAssignment == nil {
+		return elasticPlacementResult{applied: false}
+	}
+
 	result := make(map[kueue.PodSetReference]tasPodSetAssignmentResult)
 	result[workers.PodSet.Name] = tasPodSetAssignmentResult{TopologyAssignment: workersAssignment}
 	addAssumedUsage(assumedUsage, workersAssignment, &workers)
