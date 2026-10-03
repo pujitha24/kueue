@@ -17,7 +17,9 @@ limitations under the License.
 package metrics
 
 import (
+	"errors"
 	"math"
+	"sync"
 	"testing"
 	"time"
 
@@ -26,6 +28,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	dto "github.com/prometheus/client_model/go"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 
 	configapi "sigs.k8s.io/kueue/apis/config/v1beta2"
 	kueue "sigs.k8s.io/kueue/apis/kueue/v1beta2"
@@ -667,6 +670,28 @@ func TestMetricsWithDifferentRoles(t *testing.T) {
 	ClearClusterQueueResourceMetrics("queue_follower")
 	ClearClusterQueueMetrics("cq_leader")
 	ClearClusterQueueMetrics("cq_follower")
+}
+
+var registerOnce sync.Once
+
+func TestRegisterExposesReplacedWorkloadSlicesTotal(t *testing.T) {
+	// Register() panics on duplicate registration, so guard it for -count=N.
+	registerOnce.Do(Register)
+
+	err := ctrlmetrics.Registry.Register(ReplacedWorkloadSlicesTotal)
+	if _, ok := errors.AsType[prometheus.AlreadyRegisteredError](err); !ok {
+		t.Errorf("Expected kueue_replaced_workload_slices_total to be registered by Register(), got registration error: %v", err)
+	}
+}
+
+func TestClearClusterQueueMetricsClearsReplacedWorkloadSlices(t *testing.T) {
+	const cqName = "cq-replaced-slices"
+
+	ReportReplacedWorkloadSlices(cqName, nil, nil)
+	expectFilteredMetricsCount(t, ReplacedWorkloadSlicesTotal, 1, "cluster_queue", cqName)
+
+	ClearClusterQueueMetrics(cqName)
+	expectFilteredMetricsCount(t, ReplacedWorkloadSlicesTotal, 0, "cluster_queue", cqName)
 }
 
 func TestClearClusterQueueMetricsOnLabelChangeOnlyClearsScopedGaugeMetrics(t *testing.T) {
