@@ -693,6 +693,29 @@ func TestWlReconcile(t *testing.T) {
 			},
 			wantResult: &reconcile.Result{RequeueAfter: defaultWorkerLostTimeout},
 		},
+		"only worker reconnecting, nothing dispatched: requeue to retry dispatch": {
+			featureGates:             map[featuregate.Feature]bool{features.WorkloadIdentifierAnnotations: false},
+			reconcileFor:             "wl1",
+			worker1Reconnecting:      true,
+			worker1DisconnectedSince: new(now),
+			managersJobs:             []batchv1.Job{*baseJobManagedByKueueBuilder.DeepCopy()},
+			managersWorkloads: []kueue.Workload{
+				*baseWorkloadBuilder.Clone().
+					AdmissionCheck(kueue.AdmissionCheckState{Name: "ac1", State: kueue.CheckStatePending}).
+					ControllerReference(batchv1.SchemeGroupVersion.WithKind("Job"), "job1", "uid1").
+					ReserveQuotaAt(utiltestingapi.MakeAdmission("q1").Obj(), now).
+					Obj(),
+			},
+			wantManagersJobs: []batchv1.Job{*baseJobManagedByKueueBuilder.DeepCopy()},
+			wantManagersWorkloads: []kueue.Workload{
+				*baseWorkloadBuilder.Clone().
+					AdmissionCheck(kueue.AdmissionCheckState{Name: "ac1", State: kueue.CheckStatePending}).
+					ControllerReference(batchv1.SchemeGroupVersion.WithKind("Job"), "job1", "uid1").
+					ReserveQuotaAt(utiltestingapi.MakeAdmission("q1").Obj(), now).
+					Obj(),
+			},
+			wantResult: &reconcile.Result{RequeueAfter: unavailableClustersRequeueAfter},
+		},
 		"handle workload evicted on manager cluster": {
 			featureGates: map[featuregate.Feature]bool{features.WorkloadIdentifierAnnotations: false},
 			reconcileFor: "wl1",
@@ -2541,9 +2564,26 @@ func TestNominateAndSynchronizeWorkers_MoreCases(t *testing.T) {
 		cond                      *metav1.Condition
 		createErr                 error
 		wantCreated               []string
+		unavailableClusters       []string
 		wantErr                   bool
+		wantRequeueAfter          time.Duration
 		wantNominatedClusterNames []string // if non-nil, asserts NominatedClusterNames after reconcile
 	}{
+		{
+			name:                "AllClusters: all clusters unavailable, requeue",
+			dispatcherMode:      config.MultiKueueDispatcherModeAllAtOnce,
+			remotes:             map[string]*kueue.Workload{},
+			unavailableClusters: []string{remoteNames[0]},
+			wantRequeueAfter:    unavailableClustersRequeueAfter,
+		},
+		{
+			name:                      "AllClusters: one cluster unavailable, dispatch to the available one without requeue",
+			dispatcherMode:            config.MultiKueueDispatcherModeAllAtOnce,
+			remotes:                   map[string]*kueue.Workload{remoteNames[0]: nil},
+			unavailableClusters:       []string{remoteNames[1]},
+			wantCreated:               []string{remoteNames[0]},
+			wantNominatedClusterNames: []string{remoteNames[0]},
+		},
 		{
 			name:                      "AllClusters: clone to all remotes, nominates all",
 			dispatcherMode:            config.MultiKueueDispatcherModeAllAtOnce,
@@ -2649,10 +2689,11 @@ func TestNominateAndSynchronizeWorkers_MoreCases(t *testing.T) {
 				local.Status.Conditions = append(local.Status.Conditions, *tt.cond)
 			}
 			group := &wlGroup{
-				local:         local,
-				remotes:       tt.remotes,
-				remoteClients: remoteClients,
-				acName:        "ac1",
+				local:               local,
+				remotes:             tt.remotes,
+				remoteClients:       remoteClients,
+				acName:              "ac1",
+				unavailableClusters: tt.unavailableClusters,
 			}
 
 			wlRec := &wlReconciler{
@@ -2662,9 +2703,12 @@ func TestNominateAndSynchronizeWorkers_MoreCases(t *testing.T) {
 			}
 
 			ctx, _ := utiltesting.ContextWithLog(t)
-			_, err := wlRec.nominateAndSynchronizeWorkers(ctx, group)
+			res, err := wlRec.nominateAndSynchronizeWorkers(ctx, group)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("expected error: %v, got: %v", tt.wantErr, err)
+			}
+			if res.RequeueAfter != tt.wantRequeueAfter {
+				t.Errorf("unexpected RequeueAfter: want %v, got %v", tt.wantRequeueAfter, res.RequeueAfter)
 			}
 
 			var gotCreated []string

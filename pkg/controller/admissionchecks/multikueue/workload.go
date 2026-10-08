@@ -88,6 +88,13 @@ var (
 // in this package point here rather than repeating it.
 const syncDeferredRequeueAfter = 2 * time.Second
 
+// unavailableClustersRequeueAfter is the delay used to re-reconcile a workload
+// that could not be dispatched because all of its candidate worker clusters were
+// temporarily unavailable (for example, while their watches are re-established).
+// Reconnecting a cluster does not re-enqueue pending workloads, so without this
+// requeue the workload would stay Pending until some unrelated event.
+const unavailableClustersRequeueAfter = 2 * time.Second
+
 type wlReconciler struct {
 	client            client.Client
 	helper            *admissioncheck.MultiKueueStoreHelper
@@ -669,7 +676,7 @@ func (w *wlReconciler) reconcileGroup(ctx context.Context, group *wlGroup) (reco
 	}
 
 	res, err := w.nominateAndSynchronizeWorkers(ctx, group)
-	if err == nil && (res.RequeueAfter == 0 || requeueAfterSynchronize < res.RequeueAfter) {
+	if err == nil && requeueAfterSynchronize != 0 && (res.RequeueAfter == 0 || requeueAfterSynchronize < res.RequeueAfter) {
 		res.RequeueAfter = requeueAfterSynchronize
 	}
 	return res, err
@@ -905,6 +912,7 @@ func (w *wlReconciler) nominateAndSynchronizeWorkers(ctx context.Context, group 
 	}
 
 	var nominatedWorkers []string
+	var requeueAfter time.Duration
 
 	// For elastic workloads, retrieve the remote cluster where the original workload was scheduled.
 	// For now, new workload slices will continue to be assigned to the same cluster.
@@ -929,6 +937,10 @@ func (w *wlReconciler) nominateAndSynchronizeWorkers(ctx context.Context, group 
 		}); err != nil {
 			log.V(2).Error(err, "Failed to patch nominated clusters", "workload", klog.KObj(group.local))
 			return reconcile.Result{}, err
+		}
+		if len(nominatedWorkers) == 0 && len(group.unavailableClusters) > 0 {
+			log.V(3).Info("No worker cluster available for dispatch, retrying", "unavailableClusters", group.unavailableClusters, "retryAfter", unavailableClustersRequeueAfter)
+			requeueAfter = unavailableClustersRequeueAfter
 		}
 	} else {
 		// Incremental dispatcher and External dispatcher path
@@ -964,7 +976,7 @@ func (w *wlReconciler) nominateAndSynchronizeWorkers(ctx context.Context, group 
 			group.remotes[rem] = nil
 		}
 	}
-	return reconcile.Result{}, errors.Join(errs...)
+	return reconcile.Result{RequeueAfter: requeueAfter}, errors.Join(errs...)
 }
 
 func (w *wlReconciler) Create(_ event.CreateEvent) bool {
