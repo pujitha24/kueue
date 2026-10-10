@@ -467,6 +467,29 @@ func Test_multiKueueAdapter_SyncJob(t *testing.T) {
 					Obj(),
 			},
 		},
+		"RemoteJobRedispatched_FailedCounterNotDecreased": {
+			args: args{
+				localClient: fake.NewClientBuilder().WithScheme(schema).WithObjects(newJob().Suspend(false).Failed(1).Obj()).Build(),
+				remoteClient: fake.NewClientBuilder().WithScheme(schema).WithObjects(newJob().
+					Ready(2).
+					Condition(runningJobCondition).
+					Obj()).Build(),
+				key: client.ObjectKeyFromObject(newJob().Obj()),
+			},
+			want: want{
+				localJob: newJob().
+					ResourceVersion("2").
+					Suspend(false).
+					Failed(1).
+					Ready(2).
+					Condition(runningJobCondition).
+					Obj(),
+				remoteJob: newJob().
+					Ready(2).
+					Condition(runningJobCondition).
+					Obj(),
+			},
+		},
 		"RemoteJobFinished_Completed": {
 			args: args{
 				localClient: fake.NewClientBuilder().WithScheme(schema).WithObjects(newJob().Suspend(false).Obj()).Build(),

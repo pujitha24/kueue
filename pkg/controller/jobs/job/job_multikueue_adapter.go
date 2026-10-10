@@ -65,6 +65,7 @@ func (b *multiKueueAdapter) SyncJob(ctx context.Context, localClient client.Clie
 	// the remote job exists
 	if err == nil {
 		statusUpdate, deferred := determineStatusUpdate(ctx, log, &localJob, &remoteJob)
+		statusUpdate = keepMonotonicCounters(&localJob.Status, statusUpdate)
 		if !equality.Semantic.DeepEqual(localJob.Status, *statusUpdate) {
 			if err := clientutil.PatchStatus(ctx, localClient, &localJob, func() (bool, error) {
 				localJob.Status = *statusUpdate
@@ -110,6 +111,20 @@ func (b *multiKueueAdapter) SyncJob(ctx context.Context, localClient client.Clie
 	remoteJob.Spec.ManagedBy = nil
 
 	return false, remoteClient.Create(ctx, &remoteJob)
+}
+
+// keepMonotonicCounters returns update with status.failed and status.succeeded
+// raised to the values already on the local Job. The API server rejects
+// decreasing these counters for managedBy Jobs, and a re-dispatched remote Job
+// restarts them at zero, which would otherwise block every later status sync.
+func keepMonotonicCounters(local, update *batchv1.JobStatus) *batchv1.JobStatus {
+	if update.Failed >= local.Failed && update.Succeeded >= local.Succeeded {
+		return update
+	}
+	update = update.DeepCopy()
+	update.Failed = max(update.Failed, local.Failed)
+	update.Succeeded = max(update.Succeeded, local.Succeeded)
+	return update
 }
 
 // determineStatusUpdate returns the JobStatus to write to the local Job, plus
