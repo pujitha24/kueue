@@ -105,7 +105,7 @@ func TestFetchCohorts(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			h := New(newFakeClient(t, tc.funcs, tc.objs...), nil, nil)
 
-			got, err := h.fetchCohorts(t.Context())
+			got, err := h.fetchCohorts(t.Context(), middleware.Identity{})
 			if (err != nil) != tc.wantErr {
 				t.Fatalf("fetchCohorts() error = %v, wantErr %v", err, tc.wantErr)
 			}
@@ -195,6 +195,65 @@ func TestFetchCohortDetails(t *testing.T) {
 			}
 			if diff := cmp.Diff(tc.wantOmitted, got["omittedPanels"]); diff != "" {
 				t.Errorf("unexpected omittedPanels (-want,+got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestFetchCohortsAuthorization(t *testing.T) {
+	objs := []ctrlclient.Object{
+		makeCohort("team", ""),
+		makeClusterQueue("cq-a", "team"),
+	}
+	withNames := []map[string]any{{
+		"name":          "team",
+		"clusterQueues": []map[string]any{{"name": "cq-a"}},
+	}}
+	withoutNames := []map[string]any{{"name": "team"}}
+
+	tests := map[string]struct {
+		authorizer authorizerFunc
+		want       []map[string]any
+		// wantListCQ is whether ClusterQueues are expected to be listed.
+		wantListCQ bool
+	}{
+		"allowed keeps cluster queue names": {
+			authorizer: func(authorizationv1.ResourceAttributes) (bool, error) { return true, nil },
+			want:       withNames,
+			wantListCQ: true,
+		},
+		"denied omits cluster queues without listing them": {
+			authorizer: func(authorizationv1.ResourceAttributes) (bool, error) { return false, nil },
+			want:       withoutNames,
+		},
+		"authorization error omits cluster queues without listing them": {
+			authorizer: func(authorizationv1.ResourceAttributes) (bool, error) { return false, errors.New("boom") },
+			want:       withoutNames,
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			listedCQ := false
+			funcs := &interceptor.Funcs{
+				List: func(ctx context.Context, c ctrlclient.WithWatch, list ctrlclient.ObjectList, opts ...ctrlclient.ListOption) error {
+					if _, ok := list.(*kueueapi.ClusterQueueList); ok {
+						listedCQ = true
+					}
+					return c.List(ctx, list, opts...)
+				},
+			}
+			h := New(newFakeClient(t, funcs, objs...), nil, tc.authorizer)
+
+			got, err := h.fetchCohorts(t.Context(), middleware.Identity{})
+			if err != nil {
+				t.Fatalf("fetchCohorts() error = %v", err)
+			}
+			if diff := cmp.Diff(tc.want, got.([]map[string]any)); diff != "" {
+				t.Errorf("unexpected cohorts (-want,+got):\n%s", diff)
+			}
+			if listedCQ != tc.wantListCQ {
+				t.Errorf("ClusterQueues listed = %v, want %v", listedCQ, tc.wantListCQ)
 			}
 		})
 	}

@@ -31,9 +31,13 @@ import (
 // CohortsWebSocketHandler streams all cohorts
 func (h *Handlers) CohortsWebSocketHandler() gin.HandlerFunc {
 	// Cohorts are derived from ClusterQueues, so use ClusterQueue informer
-	return h.GenericWebSocketHandler(func(ctx context.Context) (any, error) {
-		return h.fetchCohorts(ctx)
-	}, CohortsGVK(), ClusterQueuesGVK())
+	return func(c *gin.Context) {
+		identity, _ := middleware.IdentityFromContext(c)
+
+		h.GenericWebSocketHandler(func(ctx context.Context) (any, error) {
+			return h.fetchCohorts(ctx, identity)
+		}, CohortsGVK(), ClusterQueuesGVK())(c)
+	}
 }
 
 // CohortDetailsWebSocketHandler streams details for a specific cohort
@@ -49,17 +53,26 @@ func (h *Handlers) CohortDetailsWebSocketHandler() gin.HandlerFunc {
 }
 
 // Fetch all cohorts
-func (h *Handlers) fetchCohorts(ctx context.Context) (any, error) {
+func (h *Handlers) fetchCohorts(ctx context.Context, identity middleware.Identity) (any, error) {
 	// Fetch all Cohort CRD objects directly
 	cohortList := &kueueapi.CohortList{}
 	if err := h.client.List(ctx, cohortList); err != nil {
 		return nil, fmt.Errorf("error fetching cohorts: %v", err)
 	}
 
+	// ClusterQueue names are only returned to users allowed to list ClusterQueues.
+	hasClusterQueuesAccess := true
+	if h.authorizer != nil {
+		allowed, err := h.authorizer.Authorize(ctx, identity, middleware.ResourceAccess("list", ClusterQueuesGVR(), "", ""))
+		hasClusterQueuesAccess = err == nil && allowed
+	}
+
 	// Fetch all ClusterQueues to map them to cohorts
 	cql := &kueueapi.ClusterQueueList{}
-	if err := h.client.List(ctx, cql); err != nil {
-		slog.Warn("error fetching cluster queues for cohorts", "error", err)
+	if hasClusterQueuesAccess {
+		if err := h.client.List(ctx, cql); err != nil {
+			slog.Warn("error fetching cluster queues for cohorts", "error", err)
+		}
 	}
 
 	// Build a map of cohort name to ClusterQueues
@@ -77,13 +90,15 @@ func (h *Handlers) fetchCohorts(ctx context.Context) (any, error) {
 	// Build result from Cohort CRD objects
 	result := make([]map[string]any, 0)
 	for _, cohort := range cohortList.Items {
-		queues := cohortQueues[cohort.Name]
-		if queues == nil {
-			queues = []map[string]any{}
-		}
 		item := map[string]any{
-			"name":          cohort.Name,
-			"clusterQueues": queues,
+			"name": cohort.Name,
+		}
+		if hasClusterQueuesAccess {
+			queues := cohortQueues[cohort.Name]
+			if queues == nil {
+				queues = []map[string]any{}
+			}
+			item["clusterQueues"] = queues
 		}
 		if cohort.Spec.ParentName != "" {
 			item["parentName"] = string(cohort.Spec.ParentName)
