@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -1941,7 +1942,7 @@ func (h *resourceUpdatesHandler) handle(ctx context.Context, obj client.Object, 
 	case *corev1.LimitRange:
 		log := ctrl.LoggerFrom(ctx).WithValues("limitRange", klog.KObj(v))
 		ctx = ctrl.LoggerInto(ctx, log)
-		h.queueReconcileForPending(ctx, q, client.InNamespace(v.Namespace))
+		h.queueReconcileForPending(ctx, q, nil, client.InNamespace(v.Namespace))
 	case *nodev1.RuntimeClass:
 		log := ctrl.LoggerFrom(ctx).WithValues("runtimeClass", klog.KObj(v))
 		ctx = ctrl.LoggerInto(ctx, log)
@@ -1951,10 +1952,13 @@ func (h *resourceUpdatesHandler) handle(ctx context.Context, obj client.Object, 
 	}
 }
 
-func (h *resourceUpdatesHandler) queueReconcileForPending(ctx context.Context, q workqueue.TypedRateLimitingInterface[reconcile.Request], opts ...client.ListOption) {
+func (h *resourceUpdatesHandler) queueReconcileForPending(ctx context.Context, q workqueue.TypedRateLimitingInterface[reconcile.Request], fields client.MatchingFields, opts ...client.ListOption) {
 	log := ctrl.LoggerFrom(ctx)
 	lst := kueue.WorkloadList{}
-	opts = append(opts, client.MatchingFields{indexer.WorkloadQuotaReservedKey: string(metav1.ConditionFalse)})
+	// A single MatchingFields is required, as each one replaces the field selector.
+	selector := client.MatchingFields{indexer.WorkloadQuotaReservedKey: string(metav1.ConditionFalse)}
+	maps.Copy(selector, fields)
+	opts = append(opts, selector)
 	err := h.r.client.List(ctx, &lst, opts...)
 	if err != nil {
 		log.Error(err, "Could not list pending workloads")
