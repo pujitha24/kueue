@@ -514,12 +514,13 @@ func (a *FlavorAssigner) AssignTopology(ctx context.Context, log logr.Logger, as
 		if failure := result.Failure(); failure != nil {
 			// There is at least one PodSet which does not fit even if
 			// all workloads are preempted.
-			psAssignment := assignment.PodSetAssignmentByName(failure.PodSetName)
 			if features.Enabled(features.UnadmittedWorkloadsObservability) {
-				psAssignment.MarkFlavorAttempt(failure.Flavor, NoFit, kueue.WorkloadQuotaReservedReasonTopologyPlacementFailed)
+				assignment.PodSetAssignmentByName(failure.PodSetName).
+					MarkFlavorAttempt(failure.Flavor, NoFit, kueue.WorkloadQuotaReservedReasonTopologyPlacementFailed)
 			}
-			// update the mode for all flavors and the representative mode
-			assignment.updateMode(failure.PodSetName, NoFit)
+			// A non-empty status keeps the PodSet from being treated as Fit when
+			// resolving the NoFit reason and building the message.
+			assignment.ResolvePodSetFailure(failure.PodSetName, NoFit, NewStatus(failure.Reason))
 		} else {
 			// Update TAS-related assignments to Preempt because preemptions might be needed
 			// in resources in which total unused quota is sufficient (Fit), but the

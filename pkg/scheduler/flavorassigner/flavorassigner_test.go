@@ -9101,6 +9101,60 @@ func TestAssignTopology(t *testing.T) {
 	}
 }
 
+// TestAssignTopologyNoFitPodSetAmongPreemptPodSets verifies that a PodSet that no
+// empty cluster can host is reported, even when another PodSet only needs preemption.
+func TestAssignTopologyNoFitPodSetAmongPreemptPodSets(t *testing.T) {
+	features.SetFeatureGateDuringTest(t, features.TopologyAwareScheduling, true)
+	features.SetFeatureGateDuringTest(t, features.UnadmittedWorkloadsObservability, true)
+	ctx, log := utiltesting.ContextWithLog(t)
+	cq := newBookmarkSnapshot(ctx, t, log, "10", "0", kueue.FlavorFungibility{})
+	wlInfo := workload.NewInfo(log, utiltestingapi.MakeWorkload("wl", "default").
+		PodSets(
+			*utiltestingapi.MakePodSet("a", 1).
+				RequiredTopologyRequest(corev1.LabelHostname).
+				Request(corev1.ResourceCPU, "1").
+				Obj(),
+			*utiltestingapi.MakePodSet("b", 1).
+				RequiredTopologyRequest(corev1.LabelHostname).
+				Request(corev1.ResourceCPU, "5").
+				Obj(),
+		).
+		Obj())
+	podSetAssignment := func(name kueue.PodSetReference, cpu string, mode FlavorAssignmentMode) PodSetAssignment {
+		return PodSetAssignment{
+			Name:     name,
+			Count:    1,
+			Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse(cpu)},
+			Flavors: ResourceAssignment{
+				corev1.ResourceCPU: &FlavorAssignment{Name: "flavor-1", Mode: mode},
+			},
+			FlavorAssignmentAttempts: []FlavorAssignmentAttempt{{Flavor: "flavor-1", Mode: mode}},
+		}
+	}
+	// "a" needs preemption for quota, "b" fits quota but exceeds node-1's 4 cpu.
+	psA := podSetAssignment("a", "1", Preempt)
+	psA.Status = *NewStatus("insufficient unused quota")
+	assignment := &Assignment{PodSets: []PodSetAssignment{psA, podSetAssignment("b", "5", Fit)}}
+	assigner := New(wlInfo, cq, bookmarkTestFlavors(), false, &testOracle{}, nil,
+		configapi.QuotaCheckBlockUndeclared, resources.NewResourceFormatter(), bookmarkTestCycle)
+
+	assigner.AssignTopology(ctx, log, assignment)
+	assignment.ResolveNoFitReason(cq)
+
+	if got := assignment.RepresentativeMode(); got != NoFit {
+		t.Errorf("RepresentativeMode() = %s, want %s", got, NoFit)
+	}
+	if got, want := assignment.NoFitReason, kueue.WorkloadQuotaReservedReasonTopologyPlacementFailed; got != want {
+		t.Errorf("NoFitReason = %q, want %q", got, want)
+	}
+	msg := assignment.Message()
+	for _, want := range []string{"pod set a", "pod set b"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("Message() = %q, want it to mention %q", msg, want)
+		}
+	}
+}
+
 // TestResolveNoFitReason exercises Assignment.ResolveNoFitReason on its own. Every case
 // starts from a hand-built Assignment, so no quota scan and no topology pass runs and the
 // only behaviour under test is the reason aggregation.
