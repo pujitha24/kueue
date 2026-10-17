@@ -4200,3 +4200,46 @@ func TestAddOrUpdateWorkloadCarriesFlavorScanStateMultiInflight(t *testing.T) {
 		t.Errorf("FlavorScanState after the update (-want,+got):\n%s", diff)
 	}
 }
+
+func TestRequeueKeepsChargePushedWhileInflight(t *testing.T) {
+	features.SetFeatureGateDuringTest(t, features.KueueDRAIntegration, true)
+	ctx, log := utiltesting.ContextWithLog(t)
+	tmpl := "tmpl"
+	wl := utiltestingapi.MakeWorkload("wl", "default").Queue("lq").Generation(1).PodSets(
+		*utiltestingapi.MakePodSet(kueue.DefaultPodSetName, 1).PodSpec(corev1.PodSpec{
+			ResourceClaims: []corev1.PodResourceClaim{{Name: "rc", ResourceClaimTemplateName: &tmpl}},
+		}).Obj()).Obj()
+	lq := utiltestingapi.MakeLocalQueue("lq", "default").ClusterQueue("cq").Obj()
+	cl := utiltesting.NewClientBuilder().WithObjects(wl.DeepCopy(), lq).
+		WithIndex(&corev1.LimitRange{}, indexer.LimitRangeHasContainerOrPodType, indexer.IndexLimitRangeHasContainerOrPodType).
+		Build()
+	m := NewManagerForUnitTests(cl, nil, WithPreemptionExpectations(preemptexpectations.New()))
+	m.SetDRAReconcileChannel(make(chan event.TypedGenericEvent[*kueue.Workload], 2))
+	if err := m.AddClusterQueue(ctx, utiltestingapi.MakeClusterQueue("cq").Obj()); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.AddLocalQueue(ctx, lq); err != nil {
+		t.Fatal(err)
+	}
+	gpu := func(n int64) workload.InfoOption {
+		return workload.WithPreprocessedDRAResources(map[kueue.PodSetReference]corev1.ResourceList{
+			kueue.DefaultPodSetName: {"gpu": *resource.NewQuantity(n, resource.DecimalSI)},
+		}, nil)
+	}
+	if err := m.AddOrUpdateWorkload(ctx, log, wl, gpu(1)); err != nil {
+		t.Fatal(err)
+	}
+	head := m.PopFrom("cq")
+	if head == nil {
+		t.Fatal("expected the workload to be popped")
+	}
+	// The workload controller pushes a recomputed charge while the scheduler holds the workload.
+	if err := m.AddOrUpdateWorkload(ctx, log, wl.DeepCopy(), gpu(12)); err != nil {
+		t.Fatal(err)
+	}
+	m.RequeueWorkload(ctx, &head.Info, RequeueReasonGeneric, "")
+	got := m.hm.ClusterQueue("cq").trackedInfo(workload.Key(wl)).TotalRequests[0].Requests.ResourceValue("gpu")
+	if got.CmpInt64(12) != 0 {
+		t.Errorf("gpu charge after requeue = %s, want 12", got)
+	}
+}

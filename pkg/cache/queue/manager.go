@@ -828,6 +828,12 @@ func (m *Manager) requeueWorkloadLocked(ctx context.Context, info *workload.Info
 		if features.Enabled(features.KueueDRAIntegration) && info.Obj.Generation != w.Generation {
 			return false, w.DeepCopy()
 		}
+		// takePopped removed the LocalQueue's copy at checkout, so a copy found here
+		// was pushed while the scheduler held the workload. Its charges are newer
+		// than the ones the scheduler took.
+		if pushed := q.items[wlKey]; pushed != nil && pushed.Obj.Generation == w.Generation {
+			info.TotalRequests = pushed.TotalRequests
+		}
 		options = append(options, workload.WithPreserveTotalRequests())
 	}
 	info.Update(log, &w, options...)
