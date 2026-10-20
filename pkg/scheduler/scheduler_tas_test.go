@@ -4223,6 +4223,8 @@ func runTASScheduleTestCases(t *testing.T, cfg tasScheduleTestConfig, cases map[
 						recordingFactory = &recordingSimulatorFactory{simulatorFactory: simulatorFactory}
 						recordingFactory.recorder.failPreempt = tc.failSimulatorPreemption
 						cacheOptions = append(cacheOptions, schdcache.WithSimulatorFactory(recordingFactory))
+					} else if len(tc.wantSimulatorPreemptions) > 0 || len(tc.wantSimulatorReleasedTogether) > 0 || tc.failSimulatorPreemption {
+						t.Fatalf("simulator expectations are set, but %s is not enabled in featureGates", features.SchedulerLibraryIntegration)
 					}
 					cqCache := schdcache.New(cl, cacheOptions...)
 					fakeClock := testingclock.NewFakeClock(cfg.now)

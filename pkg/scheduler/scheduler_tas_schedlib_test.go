@@ -514,10 +514,13 @@ func TestScheduleForTASPreemptionSchedulerLibrary(t *testing.T) {
 			// than reality, which is safe. It must not stop the cycle.
 			failSimulatorPreemption:  true,
 			wantSimulatorPreemptions: []workload.Reference{"default/low-priority-admitted"},
-			nodes:                    defaultSingleNode,
-			topologies:               []kueue.Topology{defaultSingleLevelTopology},
-			resourceFlavors:          []kueue.ResourceFlavor{defaultTASFlavor},
-			clusterQueues:            []kueue.ClusterQueue{defaultClusterQueueWithPreemption},
+			featureGates: map[featuregate.Feature]bool{
+				features.SchedulerLibraryIntegration: true,
+			},
+			nodes:           defaultSingleNode,
+			topologies:      []kueue.Topology{defaultSingleLevelTopology},
+			resourceFlavors: []kueue.ResourceFlavor{defaultTASFlavor},
+			clusterQueues:   []kueue.ClusterQueue{defaultClusterQueueWithPreemption},
 			workloads: []kueue.Workload{
 				*utiltestingapi.MakeWorkload("foo", "default").
 					UID("wl-foo").
@@ -644,10 +647,13 @@ func TestScheduleForTASPreemptionSchedulerLibrary(t *testing.T) {
 			// The simulated cluster has to lose the victim's Pods too, or a host
 			// port it holds keeps the node looking unusable.
 			wantSimulatorPreemptions: []workload.Reference{"default/low-priority-admitted"},
-			nodes:                    defaultSingleNode,
-			topologies:               []kueue.Topology{defaultSingleLevelTopology},
-			resourceFlavors:          []kueue.ResourceFlavor{defaultTASFlavor},
-			clusterQueues:            []kueue.ClusterQueue{defaultClusterQueueWithPreemption},
+			featureGates: map[featuregate.Feature]bool{
+				features.SchedulerLibraryIntegration: true,
+			},
+			nodes:           defaultSingleNode,
+			topologies:      []kueue.Topology{defaultSingleLevelTopology},
+			resourceFlavors: []kueue.ResourceFlavor{defaultTASFlavor},
+			clusterQueues:   []kueue.ClusterQueue{defaultClusterQueueWithPreemption},
 			workloads: []kueue.Workload{
 				*utiltestingapi.MakeWorkload("foo", "default").
 					UID("wl-foo").
@@ -768,15 +774,12 @@ func TestScheduleForTASPreemptionSchedulerLibrary(t *testing.T) {
 			},
 		},
 		"the overlap recompute takes the other preemption's victim out of the simulator": {
-			// The same cluster as the case above, with a simulator installed. The
+			// The same cluster as the case above, with the overlap recompute gates enabled. The
 			// recompute projects the other preemption's victim out of quota and TAS
 			// usage, and has to project it out of the simulator too, or the simulator
 			// keeps reporting the host ports and devices that victim holds as taken.
-			//
-			// Kept apart from the case above rather than folded into it: setting
-			// wantSimulatorPreemptions turns SchedulerLibraryIntegration on, and that
-			// case is the only cover for the recompute with the gate off.
 			featureGates: map[featuregate.Feature]bool{
+				features.SchedulerLibraryIntegration:                     true,
 				features.RecomputeAssignmentUponPreemptionTargetsOverlap: true,
 				features.TASRecomputeAssignmentWithinSchedulingCycle:     true,
 			},
