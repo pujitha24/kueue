@@ -94,3 +94,32 @@ func TestLocalQueueCreateReportsPendingWorkloadsWithCustomLabels(t *testing.T) {
 		}
 	}
 }
+
+func TestLocalQueueDeleteClearsCountersRecordedWhileStopped(t *testing.T) {
+	features.SetFeatureGateDuringTest(t, features.LocalQueueMetrics, true)
+	t.Cleanup(func() { metrics.InitMetricVectors(nil) })
+	lqMetrics, err := metrics.NewLocalQueueMetricsConfig(&config.LocalQueueMetrics{Enable: true})
+	if err != nil {
+		t.Fatalf("Creating LocalQueue metrics config: %v", err)
+	}
+	lq := utiltestingapi.MakeLocalQueue("lq", "ns").ClusterQueue("cq").StopPolicy(kueue.HoldAndDrain).Obj()
+	cl := utiltesting.NewClientBuilder().Build()
+	cqCache := schdcache.New(cl)
+	// The stopped LocalQueue is unknown to the queue manager.
+	qManager := qcache.NewManagerForUnitTests(cl, nil, qcache.WithLocalQueueMetrics(lqMetrics))
+	reconciler := NewLocalQueueReconciler(cl, qManager, cqCache, WithLocalQueueMetrics(lqMetrics))
+
+	ref := metrics.LocalQueueReference{Name: kueue.LocalQueueName(lq.Name), Namespace: lq.Namespace}
+	metrics.ReportLocalQueueEvictedWorkloads(ref, kueue.WorkloadEvictedByLocalQueueStopped, "", "", nil, nil)
+	metrics.ReportLocalQueueFinishedWorkloads(ref, 1, nil, nil)
+
+	reconciler.Delete(event.TypedDeleteEvent[*kueue.LocalQueue]{Object: lq})
+
+	lbls := map[string]string{"name": lq.Name, "namespace": lq.Namespace}
+	if got := testingmetrics.CollectFilteredGaugeVec(metrics.LocalQueueEvictedWorkloadsTotal, lbls); len(got) != 0 {
+		t.Errorf("Unexpected evicted workloads series after delete: %v", got)
+	}
+	if got := testingmetrics.CollectFilteredGaugeVec(metrics.LocalQueueFinishedWorkloadsTotal, lbls); len(got) != 0 {
+		t.Errorf("Unexpected finished workloads series after delete: %v", got)
+	}
+}

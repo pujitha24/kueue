@@ -261,7 +261,12 @@ func (r *LocalQueueReconciler) Create(e event.TypedCreateEvent[*kueue.LocalQueue
 
 func (r *LocalQueueReconciler) Delete(e event.TypedDeleteEvent[*kueue.LocalQueue]) bool {
 	if r.lqMetrics.IsEnabled() {
-		metrics.ClearLocalQueueResourceMetrics(localQueueReferenceFromLocalQueue(e.Object))
+		lqRef := localQueueReferenceFromLocalQueue(e.Object)
+		metrics.ClearLocalQueueResourceMetrics(lqRef)
+		// The queue manager clears these when a LocalQueue is stopped, and then
+		// skips the LocalQueue on delete, so counters recorded while stopped
+		// would otherwise remain.
+		metrics.ClearLocalQueueMetrics(lqRef)
 	}
 	if features.Enabled(features.CustomMetricLabels) {
 		r.customLabels.LQDelete(utilqueue.Key(e.Object))
