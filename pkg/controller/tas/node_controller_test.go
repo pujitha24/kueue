@@ -469,6 +469,18 @@ func TestNodeFailureReconciler(t *testing.T) {
 			},
 			reconcileRequests: []reconcile.Request{{Name: nodeName}},
 		},
+		"Node NotReady, only succeeded pod -> Healthy": {
+			initObjs: []client.Object{
+				baseNode.Clone().StatusConditions(corev1.NodeCondition{
+					Type:               corev1.NodeReady,
+					Status:             corev1.ConditionFalse,
+					LastTransitionTime: now}).Obj(),
+				baseWorkload.DeepCopy(),
+				testingpod.MakePod("succeeded-pod", nsName).Annotation(kueue.WorkloadAnnotation, wlName).NodeName(nodeName).StatusPhase(corev1.PodSucceeded).Obj(),
+			},
+			reconcileRequests:  []reconcile.Request{{Name: nodeName}},
+			wantUnhealthyNodes: nil,
+		},
 		"Node NotReady, 2 succeeded pods, 1 running pod -> waits": {
 			initObjs: []client.Object{
 				baseNode.Clone().StatusConditions(corev1.NodeCondition{
@@ -855,6 +867,39 @@ func TestNodeFailureReconciler(t *testing.T) {
 			},
 			reconcileRequests:  []reconcile.Request{{Name: nodeName}},
 			wantUnhealthyNodes: nil,
+			featureGates: map[featuregate.Feature]bool{
+				features.TASReplaceNodeOnNodeTaints: true,
+			},
+		},
+		"Node has NoSchedule taint, only succeeded pod -> Healthy": {
+			initObjs: []client.Object{
+				baseNode.Clone().StatusConditions(corev1.NodeCondition{
+					Type:               corev1.NodeReady,
+					Status:             corev1.ConditionTrue,
+					LastTransitionTime: now}).
+					Taints(corev1.Taint{Key: "foo", Effect: corev1.TaintEffectNoSchedule}).Obj(),
+				baseWorkload.DeepCopy(),
+				testingpod.MakePod("succeeded-pod", nsName).Annotation(kueue.WorkloadAnnotation, wlName).NodeName(nodeName).StatusPhase(corev1.PodSucceeded).Obj(),
+			},
+			reconcileRequests:  []reconcile.Request{{Name: nodeName}},
+			wantUnhealthyNodes: nil,
+			featureGates: map[featuregate.Feature]bool{
+				features.TASReplaceNodeOnNodeTaints: true,
+			},
+		},
+		"Node has NoSchedule taint, succeeded and failed pods -> Unhealthy": {
+			initObjs: []client.Object{
+				baseNode.Clone().StatusConditions(corev1.NodeCondition{
+					Type:               corev1.NodeReady,
+					Status:             corev1.ConditionTrue,
+					LastTransitionTime: now}).
+					Taints(corev1.Taint{Key: "foo", Effect: corev1.TaintEffectNoSchedule}).Obj(),
+				baseWorkload.DeepCopy(),
+				testingpod.MakePod("succeeded-pod", nsName).Annotation(kueue.WorkloadAnnotation, wlName).NodeName(nodeName).StatusPhase(corev1.PodSucceeded).Obj(),
+				testingpod.MakePod("failed-pod", nsName).Annotation(kueue.WorkloadAnnotation, wlName).NodeName(nodeName).StatusPhase(corev1.PodFailed).Obj(),
+			},
+			reconcileRequests:  []reconcile.Request{{Name: nodeName}},
+			wantUnhealthyNodes: []kueue.UnhealthyNode{{Name: nodeName}},
 			featureGates: map[featuregate.Feature]bool{
 				features.TASReplaceNodeOnNodeTaints: true,
 			},
