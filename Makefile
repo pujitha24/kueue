@@ -120,6 +120,8 @@ RELEASE_VERSION=v0.20.3
 RELEASE_BRANCH=main
 # Application version for Helm and npm (strips leading 'v' from RELEASE_VERSION)
 APP_VERSION := $(shell echo $(RELEASE_VERSION) | cut -c2-)
+# Major.minor version of the published docs, for example v0.20 (see site/hugo.toml)
+DOCS_VERSION := $(shell echo $(RELEASE_VERSION) | cut -d. -f1,2)
 
 .PHONY: all
 all: generate fmt vet build
@@ -429,6 +431,9 @@ prepare-release-branch: yq kustomize helm-docs ## Prepare the release branch wit
 	@$(call set-release-branch-images)
 	$(SED) -r 's/v[0-9]+\.[0-9]+\.[0-9]+/$(RELEASE_VERSION)/g' -i README.md -i site/hugo.toml -i cmd/kueueviz/INSTALL.md
 	$(SED) -r 's/chart_version = "[0-9]+\.[0-9]+\.[0-9]+/chart_version = "$(APP_VERSION)/g' -i README.md -i site/hugo.toml
+	@if [ "$(RELEASE_BRANCH)" != "main" ]; then \
+		$(SED) -r 's#https://kueue\.sigs\.k8s\.io(/v[0-9]+\.[0-9]+)?/docs/#https://kueue.sigs.k8s.io/$(DOCS_VERSION)/docs/#g' -i README.md; \
+	fi
 	$(SED) -r 's/--version="[0-9]+\.[0-9]+\.[0-9]+/--version="$(APP_VERSION)/g' -i charts/kueue/README.md.gotmpl -i cmd/kueueviz/INSTALL.md
 	$(SED) -r 's/[0-9]+\.[0-9]+\.[0-9]+/$(APP_VERSION)/g' -i charts/kueue/README.md
 	$(YQ) e '.appVersion = "$(RELEASE_VERSION)" | .version = "$(APP_VERSION)"' -i charts/kueue/Chart.yaml
