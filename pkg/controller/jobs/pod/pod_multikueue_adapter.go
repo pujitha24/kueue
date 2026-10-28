@@ -232,9 +232,14 @@ func syncLocalPodWithRemote(
 	}
 
 	// If the remote pod does not exist, create it
+
+	// Ephemeral containers can only be added through the ephemeralcontainers
+	// subresource, so the API server rejects them on Pod create.
+	remoteSpec := localPod.Spec.DeepCopy()
+	remoteSpec.EphemeralContainers = nil
 	remotePod = corev1.Pod{
 		ObjectMeta: api.CloneObjectMetaForCreation(&localPod.ObjectMeta),
-		Spec:       *localPod.Spec.DeepCopy(),
+		Spec:       *remoteSpec,
 	}
 
 	// Add prebuilt workload name and multikueue origin

@@ -91,6 +91,13 @@ func TestMultiKueueAdapter(t *testing.T) {
 		KueueSchedulingGate().
 		MakePodGroupWrappers(groupSize)
 
+	withEphemeralContainer := func(pod *corev1.Pod) *corev1.Pod {
+		pod.Spec.EphemeralContainers = []corev1.EphemeralContainer{{
+			Name: "debugger", Image: "busybox",
+		}}
+		return pod
+	}
+
 	resetLocalStatus := func(ctx context.Context, adapter *multiKueueAdapter, managerClient, _ client.Client) error {
 		return adapter.ResetLocalStatus(ctx, managerClient, types.NamespacedName{Name: basePodName, Namespace: TestNamespace})
 	}
@@ -119,6 +126,26 @@ func TestMultiKueueAdapter(t *testing.T) {
 
 			wantManagersPods: []corev1.Pod{
 				*basePodBuilder.DeepCopy(),
+			},
+			wantWorkerPods: []corev1.Pod{
+				*basePodBuilder.Clone().
+					PrebuiltWorkloadLabel("wl1").
+					Label(kueue.MultiKueueOriginLabel, "origin1").
+					Obj(),
+			},
+		},
+		"sync creates remote pod without ephemeral containers": {
+			featureGates: map[featuregate.Feature]bool{features.WorkloadIdentifierAnnotations: false},
+			managersPods: []corev1.Pod{
+				*withEphemeralContainer(basePodBuilder.Clone().Obj()),
+			},
+			operation: func(ctx context.Context, adapter *multiKueueAdapter, managerClient, workerClient client.Client) error {
+				_, err := adapter.SyncJob(ctx, managerClient, workerClient, types.NamespacedName{Name: basePodName, Namespace: TestNamespace}, "wl1", "origin1")
+				return err
+			},
+
+			wantManagersPods: []corev1.Pod{
+				*withEphemeralContainer(basePodBuilder.Clone().Obj()),
 			},
 			wantWorkerPods: []corev1.Pod{
 				*basePodBuilder.Clone().
